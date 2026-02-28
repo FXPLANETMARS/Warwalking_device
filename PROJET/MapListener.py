@@ -1,38 +1,16 @@
 import sys
 import json
-import folium
-import random
 import math
+import random
+import time
+import os
 
-# Point de départ temporaire
-START_LAT = 45.7775
-START_LON = -74.0020
+historique_gps = []
+routeurs = {}
+dernier_affichage = time.time()
 
-print("[*] MapListener démarré. En attente du fix GPS...")
-
-m = folium.Map(location=[START_LAT, START_LON], zoom_start=18, tiles="CartoDB positron")
-
-# --- NOUVEAU : LE CALQUE DE TON TRAJET ---
-groupe_trajet = folium.FeatureGroup(name="🔵 Mon Trajet (GPS)", show=True)
-
-groupe_ouvert = folium.FeatureGroup(name="🟢 Ouvert", show=True)
-groupe_wep = folium.FeatureGroup(name="🟡 WEP", show=True)
-groupe_wpa = folium.FeatureGroup(name="🟠 WPA", show=True)
-groupe_wpa2 = folium.FeatureGroup(name="🔴 WPA2", show=True)
-groupe_wpa3 = folium.FeatureGroup(name="🟣 WPA3", show=True)
-
-m.add_child(groupe_trajet)
-m.add_child(groupe_ouvert)
-m.add_child(groupe_wep)
-m.add_child(groupe_wpa)
-m.add_child(groupe_wpa2)
-m.add_child(groupe_wpa3)
-m.add_child(folium.LayerControl(collapsed=False))
-
-m.save("carte_tactique.html")
-
-# Mémoire pour ne pas redessiner le même routeur 100 fois si on reste sur place
-reseaux_places = set()
+# Séquence pour vider l'écran proprement au démarrage
+os.system('clear' if os.name == 'posix' else 'cls')
 
 try:
     while True:
@@ -55,54 +33,71 @@ try:
         lon = donnees.get("lon")
         
         if lat is None or lon is None:
-            print(f"[⌛ RECHERCHE SATELLITES] {ssid} ({rssi} dBm) capté, attente du GPS...")
+            if time.time() - dernier_affichage > 2.0:
+                print("\033[H\033[J", end="")
+                print(f"[{heure}] 📡 Wi-Fi capté : {ssid} ({rssi} dBm)")
+                print("❌ ATTENTE DU SIGNAL SATELLITE (Vérifie GPS2IP ou va près d'une fenêtre)...")
+                dernier_affichage = time.time()
             continue
 
-        # 1. Mettre à jour le centre de la carte pour qu'elle te suive en temps réel !
-        m.location = [lat, lon]
+        historique_gps.append([lat, lon])
+        if len(historique_gps) > 500: historique_gps.pop(0)
 
-        # 2. Dessiner TES traces de pas (Point Bleu)
-        folium.CircleMarker(
-            location=[lat, lon],
-            radius=4,
-            color="blue",
-            fill=True,
-            fill_color="blue",
-            fill_opacity=0.8,
-            popup=f"Position à {heure}"
-        ).add_to(groupe_trajet)
+        poids = 10 ** (rssi / 10.0)
+        
+        if mac not in routeurs:
+            routeurs[mac] = {"ssid": ssid, "sec": sec, "somme_lat_w": 0.0, "somme_lon_w": 0.0, "somme_w": 0.0, "meilleur_rssi": -100, "lectures": 0}
+            
+        routeurs[mac]["somme_lat_w"] += lat * poids
+        routeurs[mac]["somme_lon_w"] += lon * poids
+        routeurs[mac]["somme_w"] += poids
+        routeurs[mac]["lectures"] += 1
+        
+        # Le signal en temps réel (pour le tableau terminal)
+        routeurs[mac]["rssi_actuel"] = rssi
+        if rssi > routeurs[mac]["meilleur_rssi"]: 
+            routeurs[mac]["meilleur_rssi"] = rssi
 
-        # 3. Placer le routeur autour de toi (S'il n'est pas déjà sur la carte)
-        if mac not in reseaux_places:
-            if sec == "Ouvert": couleur, groupe_cible = "green", groupe_ouvert
-            elif sec == "WEP": couleur, groupe_cible = "orange", groupe_wep
-            elif sec == "WPA": couleur, groupe_cible = "lightred", groupe_wpa
-            elif sec == "WPA2": couleur, groupe_cible = "red", groupe_wpa2
-            elif sec == "WPA3": couleur, groupe_cible = "purple", groupe_wpa3
-            else: couleur, groupe_cible = "gray", groupe_ouvert
+        export_data = {"gps_actuel": [lat, lon], "trajet": historique_gps, "cibles": []}
+
+        for r_mac, r_data in routeurs.items():
+            lat_p = r_data["somme_lat_w"] / r_data["somme_w"]
+            lon_p = r_data["somme_lon_w"] / r_data["somme_w"]
+            
+            if r_data["lectures"] < 5:
+                random.seed(r_mac)
+                dist = max(5, abs(r_data["meilleur_rssi"]) - 30) * 1.5
+                offset = dist / 111320.0
+                angle = random.uniform(0, 2 * math.pi)
+                lat_p += offset * math.cos(angle)
+                lon_p += offset * math.sin(angle)
+
+            export_data["cibles"].append({
+                "mac": r_mac, "ssid": r_data["ssid"], "lat": lat_p, "lon": lon_p,
+                "sec": r_data["sec"], "rssi": r_data["meilleur_rssi"], "rssi_actuel": r_data.get("rssi_actuel", -100), "lectures": r_data["lectures"]
+            })
+
+        with open("data.json", "w") as f:
+            json.dump(export_data, f)
+            
+        # --- L'INTERFACE STYLE AIRODUMP-NG ---
+        # On redessine le terminal maximum 1 fois par seconde pour éviter que ça clignote
+        if time.time() - dernier_affichage > 1.0:
+            # \033[H = Retour en haut à gauche, \033[J = Effacer jusqu'en bas
+            print("\033[H\033[J", end="") 
+            print(f"[{heure}] CH : * ][ BAT : -- ][ GPS : {lat:.5f}, {lon:.5f} ][ CIBLES : {len(routeurs)}")
+            print("=" * 80)
+            print(f"{'BSSID (MAC)':<20} {'PWR':<5} {'BEACONS':<8} {'ENC':<6} {'ESSID'}")
+            print("-" * 80)
+            
+            # On trie les cibles par force de signal actuel (le plus fort en haut)
+            cibles_triees = sorted(export_data["cibles"], key=lambda x: x["rssi_actuel"], reverse=True)
+            
+            # On affiche seulement les 20 plus proches pour que ça rentre dans l'écran
+            for c in cibles_triees[:20]:
+                print(f"{c['mac']:<20} {c['rssi_actuel']:<5} {c['lectures']:<8} {c['sec']:<6} {c['ssid']}")
                 
-            print(f"[📍 {sec:^6}] {heure} | {ssid} ({rssi} dBm) | Lat: {lat:.4f}")
-            
-            # --- MATHÉMATIQUES DU RADAR ---
-            # Plus le signal est faible (ex: -90), plus on pousse le point loin du point bleu (jusqu'à ~90 mètres)
-            # Plus le signal est fort (ex: -30), plus on le met près de toi (minimum 7 mètres)
-            distance_metres = max(5, abs(rssi) - 30) * 1.5 
-            offset_degres = distance_metres / 111320.0 # Conversion en degrés de latitude
-            angle = random.uniform(0, 2 * math.pi) # Direction aléatoire (360 degrés)
-            
-            lat_wifi = lat + offset_degres * math.cos(angle)
-            lon_wifi = lon + offset_degres * math.sin(angle)
-            
-            folium.Marker(
-                location=[lat_wifi, lon_wifi],
-                popup=f"<b>{ssid}</b><br>MAC: {mac}<br>Signal capté: {rssi} dBm<br>Sécurité: <b>{sec}</b>",
-                icon=folium.Icon(color=couleur, icon="wifi", prefix='fa')
-            ).add_to(groupe_cible)
-            
-            # On le note comme "placé" pour garder la carte propre
-            reseaux_places.add(mac)
-        
-        m.save("carte_tactique.html")
-        
+            dernier_affichage = time.time()
+
 except KeyboardInterrupt:
-    print("\n[*] Arrêt du MapListener. Carte finale sauvegardée.")
+    print("\n[*] Arrêt du MapListener.")

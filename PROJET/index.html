@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard C2 - Live Radar</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <style>
+        body { margin: 0; padding: 0; background: #111; font-family: monospace; }
+        #map { width: 100vw; height: 100vh; }
+        .info-panel { position: absolute; top: 15px; left: 50px; z-index: 1000; background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 5px; border: 1px solid #0f0; color: #0f0; box-shadow: 0 0 10px #0f0;}
+    </style>
+</head>
+<body>
+    <div class="info-panel" id="status">En attente de connexion...</div>
+    <div id="map"></div>
+
+    <script>
+        var map = L.map('map').setView([45.7775, -74.0020], 18);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+
+        var icones = {
+            "Ouvert": L.icon({iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]}),
+            "WEP": L.icon({iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-orange.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]}),
+            "WPA": L.icon({iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]}),
+            "WPA2": L.icon({iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]}),
+            "WPA3": L.icon({iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-violet.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]})
+        };
+
+        // --- LES CALQUES DE FILTRES ---
+        var couches = {
+            "Ouvert": L.layerGroup().addTo(map),
+            "WEP": L.layerGroup().addTo(map),
+            "WPA": L.layerGroup().addTo(map),
+            "WPA2": L.layerGroup().addTo(map),
+            "WPA3": L.layerGroup().addTo(map)
+        };
+
+        var overlays = {
+            "🟢 Ouvert (Critique)": couches["Ouvert"],
+            "🟡 WEP (Très Vulnérable)": couches["WEP"],
+            "🟠 WPA (Vulnérable)": couches["WPA"],
+            "🔴 WPA2 (Standard)": couches["WPA2"],
+            "🟣 WPA3 (Sécurisé)": couches["WPA3"]
+        };
+        L.control.layers(null, overlays, {collapsed: false}).addTo(map);
+        // ------------------------------
+
+        var routeurMarkers = {};
+        var trajetPolyline = L.polyline([], {color: '#00ccff', weight: 4, opacity: 0.6}).addTo(map);
+        var moiMarker = L.circleMarker([0,0], {radius: 7, color: '#00ccff', fillOpacity: 1}).addTo(map);
+        
+        // Le cercle de portée du radar (80 mètres)
+        var radarCircle = L.circle([0,0], {
+            radius: 80, 
+            color: '#0f0',
+            fillColor: '#0f0',
+            fillOpacity: 0.05,
+            weight: 1,
+            dashArray: '4, 6' // Fait une ligne pointillée style radar
+        }).addTo(map);
+        
+        var premierCentrage = false;
+
+        function updateMap() {
+            fetch('data.json?' + new Date().getTime()) 
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('status').innerText = "Réseaux actifs : " + data.cibles.length;
+
+                if (!premierCentrage && data.gps_actuel[0] !== 0) {
+                    map.setView(data.gps_actuel, 18);
+                    premierCentrage = true;
+                }
+
+                moiMarker.setLatLng(data.gps_actuel);
+                radarCircle.setLatLng(data.gps_actuel);
+                trajetPolyline.setLatLngs(data.trajet);
+
+                data.cibles.forEach(cible => {
+                    let popupHtml = `<b>${cible.ssid}</b><br>MAC: ${cible.mac}<br>Lectures: ${cible.lectures}<br>Signal Max: ${cible.rssi} dBm<br>Sec: <b>${cible.sec}</b>`;
+                    
+                    if (routeurMarkers[cible.mac]) {
+                        routeurMarkers[cible.mac].setLatLng([cible.lat, cible.lon]);
+                        routeurMarkers[cible.mac].getPopup().setContent(popupHtml);
+                    } else {
+                        let iconeType = icones[cible.sec] || icones["Ouvert"];
+                        let marker = L.marker([cible.lat, cible.lon], {icon: iconeType}).bindPopup(popupHtml);
+                        routeurMarkers[cible.mac] = marker;
+                        
+                        // Assigne le marqueur à son calque de sécurité
+                        if(couches[cible.sec]) { marker.addTo(couches[cible.sec]); } 
+                        else { marker.addTo(couches["Ouvert"]); }
+                    }
+                });
+            })
+            .catch(err => {});
+        }
+
+        setInterval(updateMap, 1500); 
+    </script>
+</body>
+</html>
