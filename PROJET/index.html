@@ -5,10 +5,25 @@
     <title>Dashboard C2 - Live Radar</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+    
     <style>
         body { margin: 0; padding: 0; background: #111; font-family: monospace; }
         #map { width: 100vw; height: 100vh; }
         .info-panel { position: absolute; top: 15px; left: 50px; z-index: 1000; background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 5px; border: 1px solid #0f0; color: #0f0; box-shadow: 0 0 10px #0f0;}
+        
+        /* Style personnalisé pour nos bulles de clusters en mode sombre */
+        .marker-cluster-small, .marker-cluster-medium, .marker-cluster-large {
+            background-color: rgba(0, 204, 255, 0.4);
+        }
+        .marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div {
+            background-color: rgba(0, 204, 255, 0.8);
+            color: white;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -16,9 +31,11 @@
     <div id="map"></div>
 
     <script>
+        // Initialisation de la carte (Centrée temporairement)
         var map = L.map('map').setView([45.7775, -74.0020], 18);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
+        // Définition des icônes
         var icones = {
             "Ouvert": L.icon({iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]}),
             "WEP": L.icon({iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-orange.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]}),
@@ -27,13 +44,13 @@
             "WPA3": L.icon({iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-violet.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]})
         };
 
-        // --- LES CALQUES DE FILTRES ---
+        // Création des groupes de Clusters (maxClusterRadius: 30 pour empiler de près)
         var couches = {
-            "Ouvert": L.layerGroup().addTo(map),
-            "WEP": L.layerGroup().addTo(map),
-            "WPA": L.layerGroup().addTo(map),
-            "WPA2": L.layerGroup().addTo(map),
-            "WPA3": L.layerGroup().addTo(map)
+            "Ouvert": L.markerClusterGroup({maxClusterRadius: 30}).addTo(map),
+            "WEP": L.markerClusterGroup({maxClusterRadius: 30}).addTo(map),
+            "WPA": L.markerClusterGroup({maxClusterRadius: 30}).addTo(map),
+            "WPA2": L.markerClusterGroup({maxClusterRadius: 30}).addTo(map),
+            "WPA3": L.markerClusterGroup({maxClusterRadius: 30}).addTo(map)
         };
 
         var overlays = {
@@ -44,25 +61,31 @@
             "🟣 WPA3 (Sécurisé)": couches["WPA3"]
         };
         L.control.layers(null, overlays, {collapsed: false}).addTo(map);
-        // ------------------------------
 
         var routeurMarkers = {};
         var trajetPolyline = L.polyline([], {color: '#00ccff', weight: 4, opacity: 0.6}).addTo(map);
         var moiMarker = L.circleMarker([0,0], {radius: 7, color: '#00ccff', fillOpacity: 1}).addTo(map);
-        
-        // Le cercle de portée du radar (80 mètres)
-        var radarCircle = L.circle([0,0], {
-            radius: 80, 
-            color: '#0f0',
-            fillColor: '#0f0',
-            fillOpacity: 0.05,
-            weight: 1,
-            dashArray: '4, 6' // Fait une ligne pointillée style radar
-        }).addTo(map);
-        
+        var radarCircle = L.circle([0,0], {radius: 80, color: '#0f0', fillColor: '#0f0', fillOpacity: 0.05, weight: 1, dashArray: '4, 6'}).addTo(map);
+
         var premierCentrage = false;
 
+        // ---> LE SYSTÈME DE PAUSE TACTIQUE <---
+        var pauseUpdates = false;
+
+        // On gèle la carte si un popup normal est ouvert
+        map.on('popupopen', function() { pauseUpdates = true; });
+        map.on('popupclose', function() { pauseUpdates = false; });
+
+        // On gèle la carte si une toile d'araignée est ouverte
+        Object.values(couches).forEach(layer => {
+            layer.on('spiderfied', function() { pauseUpdates = true; });
+            layer.on('unspiderfied', function() { pauseUpdates = false; });
+        });
+
         function updateMap() {
+            // Si la pause tactique est active, on annule la mise à jour !
+            if (pauseUpdates) return; 
+
             fetch('data.json?' + new Date().getTime()) 
             .then(response => response.json())
             .then(data => {
@@ -88,7 +111,6 @@
                         let marker = L.marker([cible.lat, cible.lon], {icon: iconeType}).bindPopup(popupHtml);
                         routeurMarkers[cible.mac] = marker;
                         
-                        // Assigne le marqueur à son calque de sécurité
                         if(couches[cible.sec]) { marker.addTo(couches[cible.sec]); } 
                         else { marker.addTo(couches["Ouvert"]); }
                     }
@@ -97,6 +119,7 @@
             .catch(err => {});
         }
 
+        // Lancement de la boucle
         setInterval(updateMap, 1500); 
     </script>
 </body>
