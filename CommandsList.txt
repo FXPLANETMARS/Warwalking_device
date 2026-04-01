@@ -2,3 +2,10 @@ ssh kali@100.126.11.58 "sudo python3 -u agent_c2.py" | python3 -u MapListener.py
 
 python3 -m http.server 8000
 
+
+
+./Lancer_Radar.command
+
+https://localhost:4443/
+
+https://100.117.225.80:4443/?tracker=1
