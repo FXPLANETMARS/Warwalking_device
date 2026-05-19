@@ -2,46 +2,36 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Dashboard C2 - Live Radar v2.1</title>
+    <title>Dashboard C2 - Live Radar v3.0 (Mode ESSID)</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-    
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
-    <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
     
     <style>
         body { margin: 0; padding: 0; background: #111; font-family: monospace; }
         #map { width: 100vw; height: 100vh; }
         .info-panel { position: absolute; top: 15px; left: 50px; z-index: 1000; background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 5px; border: 1px solid #0f0; color: #0f0; box-shadow: 0 0 10px #0f0;}
-        
-        /* Style personnalisé pour nos bulles de clusters en mode sombre */
-        .marker-cluster-small, .marker-cluster-medium, .marker-cluster-large {
-            background-color: rgba(0, 204, 255, 0.4);
-        }
-        .marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div {
-            background-color: rgba(0, 204, 255, 0.8);
-            color: white;
-            font-weight: bold;
-        }
     </style>
 </head>
 <body>
-    <div class="info-panel" id="status">Initialisation du système...</div>
+    <div class="info-panel" id="status">Initialisation du système tactique...</div>
     <div id="map"></div>
 
     <script>
-        // Initialisation de la carte (Centrée sur Berthierville par défaut)
-        var map = L.map('map').setView([46.088, -73.200], 17);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+        var map = L.map('map', { maxZoom: 25 }).setView([46.088, -73.200], 17);
         
-        // Création des groupes de Clusters (On ajoute l'option spiderfy !)
+        // Le fond de carte "Dark Matter" de CartoDB
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            maxNativeZoom: 19, 
+            maxZoom: 25,       
+            attribution: '© OpenStreetMap & CartoDB'
+        }).addTo(map);
+        
         var couches = {
-            "Ouvert": L.markerClusterGroup({maxClusterRadius: 30, spiderfyOnMaxZoom: true}).addTo(map),
-            "WEP": L.markerClusterGroup({maxClusterRadius: 30, spiderfyOnMaxZoom: true}).addTo(map),
-            "WPA": L.markerClusterGroup({maxClusterRadius: 30, spiderfyOnMaxZoom: true}).addTo(map),
-            "WPA2": L.markerClusterGroup({maxClusterRadius: 30, spiderfyOnMaxZoom: true}).addTo(map),
-            "WPA3": L.markerClusterGroup({maxClusterRadius: 30, spiderfyOnMaxZoom: true}).addTo(map)
+            "Ouvert": L.layerGroup().addTo(map),
+            "WEP": L.layerGroup().addTo(map),
+            "WPA": L.layerGroup().addTo(map),
+            "WPA2": L.layerGroup().addTo(map),
+            "WPA3": L.layerGroup().addTo(map)
         };
 
         var overlays = {
@@ -59,30 +49,19 @@
         var radarCircle = L.circle([0,0], {radius: 80, color: '#0f0', fillColor: '#0f0', fillOpacity: 0.05, weight: 1, dashArray: '4, 6'}).addTo(map);
 
         var premierCentrage = false;
-
-        // ---> LE SYSTÈME DE PAUSE TACTIQUE <---
         var pauseUpdates = false;
 
-        // On gèle la carte si un popup normal est ouvert
         map.on('popupopen', function() { pauseUpdates = true; });
         map.on('popupclose', function() { pauseUpdates = false; });
 
-        // On gèle la carte si une toile d'araignée est ouverte
-        Object.values(couches).forEach(layer => {
-            layer.on('spiderfied', function() { pauseUpdates = true; });
-            layer.on('unspiderfied', function() { pauseUpdates = false; });
-        });
-
         function updateMap() {
-            // Si la pause tactique est active, on annule la mise à jour !
             if (pauseUpdates) return; 
 
             fetch('data.json?' + new Date().getTime()) 
             .then(response => response.json())
             .then(data => {
-                let txtStatus = "Réseaux actifs : " + data.cibles.length;
+                let txtStatus = "Réseaux Uniques : " + data.cibles.length;
                 
-                // Si on a un fix GPS valide
                 if (data.gps_actuel[0] !== 0) {
                     moiMarker.setLatLng(data.gps_actuel);
                     radarCircle.setLatLng(data.gps_actuel);
@@ -100,23 +79,26 @@
                 document.getElementById('status').innerText = txtStatus;
 
                 data.cibles.forEach(cible => {
-                    let popupHtml = `<b>${cible.ssid}</b><br>Fabricant: <span style="color:#0f0">${cible.fabricant}</span><br>MAC: ${cible.mac}<br>Lectures: ${cible.lectures}<br>Signal Max: ${cible.rssi} dBm<br>Sec: <b>${cible.sec}</b>`;
+                    let popupHtml = `<b>${cible.ssid}</b><br>
+                                     Fabricant(s): <span style="color:#0f0">${cible.fabricant}</span><br>
+                                     Couverture: <b>${cible.mac}</b><br>
+                                     Lectures totales: ${cible.lectures}<br>
+                                     Signal Max: ${cible.rssi} dBm<br>
+                                     Sécurité: <b>${cible.sec}</b>`;
                     
-                    if (routeurMarkers[cible.mac]) {
-                        routeurMarkers[cible.mac].setLatLng([cible.lat, cible.lon]);
-                        routeurMarkers[cible.mac].getPopup().setContent(popupHtml);
+                    if (routeurMarkers[cible.ssid]) {
+                        routeurMarkers[cible.ssid].setLatLng([cible.lat, cible.lon]);
+                        routeurMarkers[cible.ssid].getPopup().setContent(popupHtml);
                     } else {
-                        // On met en majuscules pour éviter les erreurs de casse
                         let secPropre = cible.sec ? cible.sec.toUpperCase() : "OUVERT";
                         
-                        let couleurType = "#00ff00"; // Vert par défaut
+                        let couleurType = "#00ff00"; 
                         let nomCouche = "Ouvert";
 
-                        // Détection intelligente (Priorité à la meilleure sécurité annoncée)
                         if (secPropre.includes("WPA3")) { couleurType = "#aa00ff"; nomCouche = "WPA3"; }
-                        else if (secPropre.includes("WPA2")) { couleurType = "#ff0000"; nomCouche = "WPA2"; } // Rouge
-                        else if (secPropre.includes("WPA")) { couleurType = "#ff9900"; nomCouche = "WPA"; }  // Orange
-                        else if (secPropre.includes("WEP")) { couleurType = "#ffaa00"; nomCouche = "WEP"; }  // Jaune moutarde
+                        else if (secPropre.includes("WPA2")) { couleurType = "#ff0000"; nomCouche = "WPA2"; } 
+                        else if (secPropre.includes("WPA")) { couleurType = "#ff9900"; nomCouche = "WPA"; }  
+                        else if (secPropre.includes("WEP")) { couleurType = "#ffaa00"; nomCouche = "WEP"; }  
 
                         let marker = L.circleMarker([cible.lat, cible.lon], {
                             radius: 8,
@@ -127,7 +109,7 @@
                             fillOpacity: 0.9
                         }).bindPopup(popupHtml);
 
-                        routeurMarkers[cible.mac] = marker;
+                        routeurMarkers[cible.ssid] = marker;
                         
                         if(couches[nomCouche]) { marker.addTo(couches[nomCouche]); } 
                         else { marker.addTo(couches["Ouvert"]); }
@@ -137,46 +119,34 @@
             .catch(err => {});
         }
 
-        // Lancement de la boucle
         setInterval(updateMap, 1500); 
     </script>
 
 <script>
-    // 1. On vérifie si l'URL contient "?tracker=1"
     const urlParams = new URLSearchParams(window.location.search);
     
     if (urlParams.get('tracker') === '1') {
-        
-        // L'URL est relative. Tout roule sur le même serveur Unifié.
         const API_URL = "/update_gps";
 
-        // 2. Vérification de la compatibilité
         if ("geolocation" in navigator) {
-            
-            // Paramètres tactiques : On veut la haute précision absolue
             const options = {
                 enableHighAccuracy: true,
                 maximumAge: 0,
-                timeout: 15000 // On donne 15s à l'antenne pour fixer
+                timeout: 15000 
             };
 
-            // 3. watchPosition : Reste allumé et suit chaque pas que tu fais
             navigator.geolocation.watchPosition(
                 function(position) {
                     const lat = position.coords.latitude;
                     const lon = position.coords.longitude;
                     
-                    // 4. On tire les coordonnées vers le Mac silencieusement (pas de console.log)
                     fetch(API_URL, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ lat: lat, lon: lon })
-                    }).catch(err => {
-                        // Erreur réseau silencieuse
-                    });
+                    }).catch(err => {});
                 },
                 function(erreur) {
-                    // On avertit uniquement en cas d'erreur critique
                     alert("ERREUR TACTIQUE GPS : " + erreur.message);
                 },
                 options
@@ -185,10 +155,8 @@
             alert("Navigateur incompatible GPS.");
         }
     } else {
-        // Mode visualisation seule (Mac)
         document.getElementById('status').innerText += " [Mode QG]";
     }
 </script>
-
 </body>
 </html>
